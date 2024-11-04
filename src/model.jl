@@ -339,6 +339,131 @@ function settrans(model::BUGSModel, bool::Bool=!(model.transformed))
 end
 
 function AbstractPPL.condition(
+    model::BUGSModel, variables_to_condition_on_and_values::NamedTuple{names}
+) where {names}
+    return AbstractPPL.condition(
+        model,
+        Dict(VarName{k}() => v for (k, v) in pairs(variables_to_condition_on_and_values)),
+    )
+end
+function AbstractPPL.condition(
+    model::BUGSModel, variables_to_condition_on_and_values::Dict{<:VarName,<:Any}
+)
+    evaluation_env = deepcopy(model.evaluation_env)
+    for (variable, value) in pairs(variables_to_condition_on_and_values)
+        evaluation_env = BangBang.setindex!!(evaluation_env, value, variable)
+    end
+    BangBang.setproperty!!(model, :evaluation_env, evaluation_env)
+
+    vars_to_condition_on = VarName[]
+    for vn in keys(variables_to_condition_on_and_values)
+        if vn ∉ labels(model.g)
+            subsumed_vars = _get_subsumed_vars(model, vn)
+            if !isempty(subsumed_vars)
+                for v in subsumed_vars
+                    model = _set_is_observed(model, v, true)
+                    push!(vars_to_condition_on, v)
+                end
+            end
+        else
+            model = _set_is_observed(model, vn, true)
+            push!(vars_to_condition_on, vn)
+        end
+    end
+
+    new_parameters = setdiff(model.parameters, vars_to_condition_on)
+    untransformed_param_length = sum(
+        model.untransformed_var_lengths[v] for v in new_parameters
+    )
+    transformed_param_length = sum(model.transformed_var_lengths[v] for v in new_parameters)
+
+    return BUGSModel(
+        model.transformed,
+        untransformed_param_length,
+        transformed_param_length,
+        model.untransformed_var_lengths,
+        model.transformed_var_lengths,
+        evaluation_env,
+        new_parameters,
+        model.eval_cache,
+        model.g,
+        model.base_model isa Nothing ? model : model.base_model,
+    )
+end
+
+function AbstractPPL.decondition(model::BUGSModel, var_group::Vector{<:VarName})
+    vars_to_decondition_on = VarName[]
+    for vn in var_group
+        if vn ∉ labels(model.g)
+            subsumed_vars = _get_subsumed_vars(model, vn)
+            if !isempty(subsumed_vars)
+                for v in subsumed_vars
+                    model = _set_is_observed(model, v, false)
+                    push!(vars_to_decondition_on, v)
+                end
+            end
+        else
+            model = _set_is_observed(model, vn, false)
+            push!(vars_to_decondition_on, vn)
+        end
+    end
+
+    new_parameters = union(model.parameters, vars_to_decondition_on)
+    untransformed_param_length = sum(
+        model.untransformed_var_lengths[v] for v in new_parameters
+    )
+    transformed_param_length = sum(model.transformed_var_lengths[v] for v in new_parameters)
+
+    return BUGSModel(
+        model.transformed,
+        untransformed_param_length,
+        transformed_param_length,
+        model.untransformed_var_lengths,
+        model.transformed_var_lengths,
+        model.evaluation_env,
+        new_parameters,
+        model.eval_cache,
+        model.g,
+        model.base_model isa Nothing ? model : model.base_model,
+    )
+end
+
+function _set_is_observed(model::BUGSModel, variable::VarName, is_observed::Bool)
+    if !model.g[variable].is_stochastic
+        throw(
+            ArgumentError(
+                "$variable is not a stochastic variable; changing observation status is not supported",
+            ),
+        )
+    elseif model.g[variable].is_observed == is_observed
+        if is_observed
+            @warn "$variable is already an observed variable; no changes made"
+        else
+            @warn "$variable is already treated as a model parameter; no changes made"
+        end
+    else
+        new_g = copy(model.g)
+        new_g[variable] = BangBang.setproperty!!(
+            model.g[variable], :is_observed, is_observed
+        )
+        model = BangBang.setproperty!!(model, :g, new_g)
+    end
+    return model
+end
+
+function _get_subsumed_vars(model::BUGSModel, vn::VarName)
+    subsumed_vars = VarName[]
+    if vn ∉ labels(model.g)
+        for v in labels(model.g)
+            if subsumes(vn, v)
+                push!(subsumed_vars, v)
+            end
+        end
+    end
+    return subsumed_vars
+end
+
+function condition_for_gibbs(
     model::BUGSModel,
     d::Dict{<:VarName,<:Any},
     sorted_nodes=Nothing, # support cached sorted Markov blanket nodes
@@ -347,12 +472,12 @@ function AbstractPPL.condition(
     for (p, value) in d
         new_evaluation_env = setindex!!(new_evaluation_env, value, p)
     end
-    return AbstractPPL.condition(
+    return condition_for_gibbs(
         model, collect(keys(d)), new_evaluation_env; sorted_nodes=sorted_nodes
     )
 end
 
-function AbstractPPL.condition(
+function condition_for_gibbs(
     model::BUGSModel,
     var_group::Vector{<:VarName},
     evaluation_env::NamedTuple=model.evaluation_env,
@@ -388,7 +513,7 @@ function AbstractPPL.condition(
     return BangBang.setproperty!!(new_model, :g, g)
 end
 
-function AbstractPPL.decondition(model::BUGSModel, var_group::Vector{<:VarName})
+function decondition_for_gibbs(model::BUGSModel, var_group::Vector{<:VarName})
     check_var_group(var_group, model)
     base_model = model.base_model isa Nothing ? model : model.base_model
 

@@ -44,12 +44,12 @@ l = @varname l
 c = @varname c
 @test Set(Symbol.(markov_blanket(model.g, c))) == Set([:l, :a, :b, :f])
 
-cond_model = AbstractPPL.condition(model, setdiff(model.parameters, [c]))
+cond_model = JuliaBUGS.condition_for_gibbs(model, setdiff(model.parameters, [c]))
 # tests for MarkovBlanketBUGSModel constructor
 @test cond_model.parameters == [c]
 @test Set(Symbol.(cond_model.eval_cache.sorted_nodes)) == Set([:l, :a, :b, :f, :c])
 
-decond_model = AbstractPPL.decondition(cond_model, [a, l])
+decond_model = JuliaBUGS.decondition_for_gibbs(cond_model, [a, l])
 @test Set(Symbol.(decond_model.parameters)) == Set([:a, :c, :l])
 @test Set(Symbol.(decond_model.eval_cache.sorted_nodes)) ==
     Set([:l, :b, :f, :a, :d, :e, :c, :h, :g, :i])

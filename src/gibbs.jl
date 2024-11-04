@@ -29,7 +29,7 @@ function AbstractMCMC.step(
     for variable_group in keys(sampler.sampler_map)
         variable_to_condition_on = setdiff(model.parameters, ensure_vector(variable_group))
         conditioning_schedule[variable_to_condition_on] = sampler.sampler_map[variable_group]
-        conditioned_model = AbstractPPL.condition(
+        conditioned_model = condition_for_gibbs(
             model, variable_to_condition_on, model.evaluation_env
         )
         cached_eval_caches[variable_to_condition_on] = conditioned_model.eval_cache
@@ -49,7 +49,7 @@ function AbstractMCMC.step(
     param_values = state.values
     for vs in keys(state.conditioning_schedule)
         model = initialize!(model, param_values)
-        cond_model = AbstractPPL.condition(
+        cond_model = condition_for_gibbs(
             model, vs, model.evaluation_env, state.cached_eval_caches[vs]
         )
         param_values = gibbs_internal(rng, cond_model, state.conditioning_schedule[vs])
