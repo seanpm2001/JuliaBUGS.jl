@@ -3,21 +3,14 @@ using JuliaBUGS: condition, decondition
 
 @testset "condition and decondition" begin
     model_def = @bugs begin
-        # Parameters with dependencies
         mu ~ Normal(0, 1)
         sigma ~ Gamma(2, 2)
-
-        # Observed variables that depend on parameters
         for i in 1:3
             y[i] ~ Normal(mu, sigma)
         end
-
-        # Additional parameter with deterministic relationship
         theta = mu + 2
         x ~ Normal(theta, 1)
-
-        # Independent parameter
-        z ~ Normal(0, 1)
+        z ~ Normal(0, sigma)
     end
     model = compile(model_def, NamedTuple(), NamedTuple())
 
