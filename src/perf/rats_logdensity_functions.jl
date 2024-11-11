@@ -11,7 +11,7 @@ function rats_logdensity_with_for_loops(evaluation_env, params)
     )
     log_density += logpdf(dgamma(0.001, 0.001), beta_tau) + logjac_beta_tau
 
-    beta_c, logjac_beta_c = Bijectors.with_logabsdet_jacobian(gamma_bijector_inv, params[2])
+    beta_c, logjac_beta_c = Bijectors.with_logabsdet_jacobian(identity, params[2])
     log_density += logpdf(dnorm(0.0, 1.0e-6), beta_c) + logjac_beta_c
 
     alpha_tau, logjac_alpha_tau = Bijectors.with_logabsdet_jacobian(
@@ -19,9 +19,7 @@ function rats_logdensity_with_for_loops(evaluation_env, params)
     )
     log_density += logpdf(dgamma(0.001, 0.001), alpha_tau) + logjac_alpha_tau
 
-    alpha_c, logjac_alpha_c = Bijectors.with_logabsdet_jacobian(
-        gamma_bijector_inv, params[4]
-    )
+    alpha_c, logjac_alpha_c = Bijectors.with_logabsdet_jacobian(identity, params[4])
     log_density += logpdf(dnorm(0.0, 1.0e-6), alpha_c) + logjac_alpha_c
 
     alpha0 = alpha_c - xbar * beta_c
@@ -38,9 +36,14 @@ function rats_logdensity_with_for_loops(evaluation_env, params)
         counter += 2
     end
 
+    # technically, for normal distributions, we don't need the logjac, but include
+    # for consistency
     for i in 1:30
-        log_density += logpdf(dnorm(alpha_c, alpha_tau), alpha[i])
-        log_density += logpdf(dnorm(beta_c, beta_tau), beta[i])
+        alpha_i, logjac_alpha_i = Bijectors.with_logabsdet_jacobian(identity, alpha[i])
+        log_density += logpdf(dnorm(alpha_c, alpha_tau), alpha_i) + logjac_alpha_i
+
+        beta_i, logjac_beta_i = Bijectors.with_logabsdet_jacobian(identity, beta[i])
+        log_density += logpdf(dnorm(beta_c, beta_tau), beta_i) + logjac_beta_i
     end
 
     for i in 1:30
@@ -71,7 +74,7 @@ function rats_logdensity_unrolled(evaluation_env, params)
     )
     log_density += logpdf(dgamma(0.001, 0.001), beta_tau) + logjac_beta_tau
 
-    beta_c, logjac_beta_c = Bijectors.with_logabsdet_jacobian(gamma_bijector_inv, params[2])
+    beta_c, logjac_beta_c = Bijectors.with_logabsdet_jacobian(identity, params[2])
     log_density += logpdf(dnorm(0.0, 1.0e-6), beta_c) + logjac_beta_c
 
     alpha_tau, logjac_alpha_tau = Bijectors.with_logabsdet_jacobian(
@@ -79,9 +82,7 @@ function rats_logdensity_unrolled(evaluation_env, params)
     )
     log_density += logpdf(dgamma(0.001, 0.001), alpha_tau) + logjac_alpha_tau
 
-    alpha_c, logjac_alpha_c = Bijectors.with_logabsdet_jacobian(
-        gamma_bijector_inv, params[4]
-    )
+    alpha_c, logjac_alpha_c = Bijectors.with_logabsdet_jacobian(identity, params[4])
     log_density += logpdf(dnorm(0.0, 1.0e-6), alpha_c) + logjac_alpha_c
 
     alpha0 = alpha_c - xbar * beta_c
@@ -531,7 +532,7 @@ function rats_logdensity_match_stan_for_mooncake(evaluation_env, params)
     )
     log_density += logpdf(dgamma(0.001, 0.001), beta_tau) + logjac_beta_tau
 
-    beta_c, logjac_beta_c = Bijectors.with_logabsdet_jacobian(gamma_bijector_inv, params[2])
+    beta_c, logjac_beta_c = Bijectors.with_logabsdet_jacobian(identity, params[2])
     log_density += logpdf(dnorm(0.0, 1.0e-6), beta_c) + logjac_beta_c
 
     alpha_tau, logjac_alpha_tau = Bijectors.with_logabsdet_jacobian(
@@ -539,9 +540,7 @@ function rats_logdensity_match_stan_for_mooncake(evaluation_env, params)
     )
     log_density += logpdf(dgamma(0.001, 0.001), alpha_tau) + logjac_alpha_tau
 
-    alpha_c, logjac_alpha_c = Bijectors.with_logabsdet_jacobian(
-        gamma_bijector_inv, params[4]
-    )
+    alpha_c, logjac_alpha_c = Bijectors.with_logabsdet_jacobian(identity, params[4])
     log_density += logpdf(dnorm(0.0, 1.0e-6), alpha_c) + logjac_alpha_c
 
     alpha0 = alpha_c - xbar * beta_c

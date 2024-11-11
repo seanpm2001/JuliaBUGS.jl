@@ -1,80 +1,125 @@
 using JuliaBUGS
 using JuliaBUGS.BUGSPrimitives
-using JuliaBUGS.BangBang
-using JuliaBUGS.Bijectors
+using BangBang
+using Bijectors
 using ADTypes
 using AbstractMCMC
 using MCMCChains
 using LogDensityProblems
+using BenchmarkTools
+using Test
+##
+
 using LogDensityProblemsAD
 using ReverseDiff
 using Mooncake
 using Enzyme
-using Chairmarks
-using Test
+##
 
 # compile the model
 (; model_def, data, inits) = JuliaBUGS.BUGSExamples.rats
 model = compile(model_def, data, inits)
 
 # rats has 65 parameters
-θ = rand(65)
+params = rand(65)
+params = JuliaBUGS.getparams(model)
 
+##
+# Define log density types for different implementations
+abstract type RatsLogDensity end
 
-# `BUGSModel` is already compatible with `LogDensityProblems`
-struct RatsLogDensityUnrolled 
-    evaluation_env
-end
-struct RatsLogDensityWithForLoops
-    evaluation_env
-end
-struct RatsLogDensityMatchStanForMooncake
+struct RatsLogDensityUnrolled <: RatsLogDensity
     evaluation_env
 end
 
-include("rats_logdensity_functions.jl")
-LogDensityProblems.logdensity(rld::RatsLogDensityUnrolled, θ) = rats_logdensity_unrolled(rld.evaluation_env, θ)
-LogDensityProblems.dimension(::RatsLogDensityUnrolled) = 65
+struct RatsLogDensityWithForLoops <: RatsLogDensity
+    evaluation_env
+end
 
-LogDensityProblems.logdensity(rld::RatsLogDensityWithForLoops, θ) = rats_logdensity_with_for_loops(rld.evaluation_env, θ)
-LogDensityProblems.dimension(::RatsLogDensityWithForLoops) = 65
+struct RatsLogDensityMatchStanForMooncake <: RatsLogDensity
+    evaluation_env
+end
 
-LogDensityProblems.logdensity(rld::RatsLogDensityMatchStanForMooncake, θ) = rats_logdensity_match_stan_for_mooncake(rld.evaluation_env, θ)
-LogDensityProblems.dimension(::RatsLogDensityMatchStanForMooncake) = 65
+# Include implementations
+Revise.includet("rats_logdensity_functions.jl")
 
+# Implement LogDensityProblems interface
+for T in (
+    :RatsLogDensityUnrolled,
+    :RatsLogDensityWithForLoops,
+    :RatsLogDensityMatchStanForMooncake,
+)
+    @eval begin
+        LogDensityProblems.dimension(::$T) = 65
+    end
+end
+
+function LogDensityProblems.logdensity(rld::RatsLogDensityUnrolled, params)
+    return rats_logdensity_unrolled(rld.evaluation_env, params)
+end
+
+function LogDensityProblems.logdensity(rld::RatsLogDensityWithForLoops, params)
+    return rats_logdensity_with_for_loops(rld.evaluation_env, params)
+end
+
+function LogDensityProblems.logdensity(rld::RatsLogDensityMatchStanForMooncake, params)
+    return rats_logdensity_match_stan_for_mooncake(rld.evaluation_env, params)
+end
+
+# Create instances
 rld_unrolled = RatsLogDensityUnrolled(deepcopy(model.evaluation_env))
 rld_with_for_loops = RatsLogDensityWithForLoops(deepcopy(model.evaluation_env))
-rld_match_stan_for_mooncake = RatsLogDensityMatchStanForMooncake(deepcopy(model.evaluation_env))
+rld_match_stan_for_mooncake = RatsLogDensityMatchStanForMooncake(
+    deepcopy(model.evaluation_env)
+)
 
-LogDensityProblems.logdensity(model, θ)
-LogDensityProblems.logdensity(rld_unrolled, θ)
-LogDensityProblems.logdensity(rld_with_for_loops, θ)
-LogDensityProblems.logdensity(rld_match_stan_for_mooncake, θ)
+# Verify implementations give same results
+LogDensityProblems.logdensity(model, params)
+LogDensityProblems.logdensity(rld_unrolled, params)
+LogDensityProblems.logdensity(rld_with_for_loops, params)
+LogDensityProblems.logdensity(rld_match_stan_for_mooncake, params)
 
-# Primals
-@be LogDensityProblems.logdensity($model, $θ)
-@be LogDensityProblems.logdensity($rld_unrolled, $θ)
-@be LogDensityProblems.logdensity($rld_with_for_loops, $θ)
+##
 
-# ReverseDiff
-reversediff_ad_logdensity_bugsmodel = LogDensityProblemsAD.ADgradient(:ReverseDiff, model; compile=Val(true))
-reversediff_ad_logdensity_unrolled = LogDensityProblemsAD.ADgradient(:ReverseDiff, rld_unrolled; compile=Val(true))
-reversediff_ad_logdensity_with_for_loops = LogDensityProblemsAD.ADgradient(:ReverseDiff, rld_with_for_loops; compile=Val(true))
+# Benchmark primals
+@benchmark LogDensityProblems.logdensity($model, $params)
+@benchmark LogDensityProblems.logdensity($rld_unrolled, $params)
+@benchmark LogDensityProblems.logdensity($rld_with_for_loops, $params)
+
+# Setup ReverseDiff AD
+const reversediff_config = (; compile=Val(true))
+const reversediff_ad_logdensity_bugsmodel = LogDensityProblemsAD.ADgradient(
+    :ReverseDiff, model; reversediff_config...
+)
+const reversediff_ad_logdensity_unrolled = LogDensityProblemsAD.ADgradient(
+    :ReverseDiff, rld_unrolled; reversediff_config...
+)
+const reversediff_ad_logdensity_with_for_loops = LogDensityProblemsAD.ADgradient(
+    :ReverseDiff, rld_with_for_loops; reversediff_config...
+)
 
 @be LogDensityProblems.logdensity_and_gradient($reversediff_ad_logdensity_bugsmodel, $θ)
 @be LogDensityProblems.logdensity_and_gradient($reversediff_ad_logdensity_unrolled, $θ)
-@be LogDensityProblems.logdensity_and_gradient($reversediff_ad_logdensity_with_for_loops, $θ)
+@be LogDensityProblems.logdensity_and_gradient(
+    $reversediff_ad_logdensity_with_for_loops, $θ
+)
 
 # Enzyme
 enzyme_ad_logdensity_bugsmodel = LogDensityProblemsAD.ADgradient(AutoEnzyme(), model)
 enzyme_ad_logdensity_unrolled = LogDensityProblemsAD.ADgradient(AutoEnzyme(), rld_unrolled)
-enzyme_ad_logdensity_with_for_loops = LogDensityProblemsAD.ADgradient(AutoEnzyme(), rld_with_for_loops)
-enzyme_ad_logdensity_match_stan_for_mooncake = LogDensityProblemsAD.ADgradient(AutoEnzyme(), rld_match_stan_for_mooncake)
+enzyme_ad_logdensity_with_for_loops = LogDensityProblemsAD.ADgradient(
+    AutoEnzyme(), rld_with_for_loops
+)
+enzyme_ad_logdensity_match_stan_for_mooncake = LogDensityProblemsAD.ADgradient(
+    AutoEnzyme(), rld_match_stan_for_mooncake
+)
 
 @be LogDensityProblems.logdensity_and_gradient($enzyme_ad_logdensity_bugsmodel, $θ)
 @be LogDensityProblems.logdensity_and_gradient($enzyme_ad_logdensity_unrolled, $θ)
 @be LogDensityProblems.logdensity_and_gradient($enzyme_ad_logdensity_with_for_loops, $θ)
-@be LogDensityProblems.logdensity_and_gradient($enzyme_ad_logdensity_match_stan_for_mooncake, $θ)
+@be LogDensityProblems.logdensity_and_gradient(
+    $enzyme_ad_logdensity_match_stan_for_mooncake, $θ
+)
 # did not run
 
 # Benchmark: 2729 samples with 10 evaluations
@@ -90,15 +135,25 @@ enzyme_ad_logdensity_match_stan_for_mooncake = LogDensityProblemsAD.ADgradient(A
 #  max    1.101 ms (7.50 allocs: 928 bytes, 99.24% gc time)
 
 # Mooncake
-mooncake_ad_logdensity_bugsmodel = LogDensityProblemsAD.ADgradient(AutoMooncake(; config=Mooncake.Config()), model)
-mooncake_ad_logdensity_unrolled = LogDensityProblemsAD.ADgradient(AutoMooncake(; config=Mooncake.Config()), rld_unrolled)
-mooncake_ad_logdensity_with_for_loops = LogDensityProblemsAD.ADgradient(AutoMooncake(; config=Mooncake.Config()), rld_with_for_loops)
-mooncake_ad_logdensity_match_stan_for_mooncake = LogDensityProblemsAD.ADgradient(AutoMooncake(; config=Mooncake.Config()), rld_match_stan_for_mooncake)
+mooncake_ad_logdensity_bugsmodel = LogDensityProblemsAD.ADgradient(
+    AutoMooncake(; config=Mooncake.Config()), model
+)
+mooncake_ad_logdensity_unrolled = LogDensityProblemsAD.ADgradient(
+    AutoMooncake(; config=Mooncake.Config()), rld_unrolled
+)
+mooncake_ad_logdensity_with_for_loops = LogDensityProblemsAD.ADgradient(
+    AutoMooncake(; config=Mooncake.Config()), rld_with_for_loops
+)
+mooncake_ad_logdensity_match_stan_for_mooncake = LogDensityProblemsAD.ADgradient(
+    AutoMooncake(; config=Mooncake.Config()), rld_match_stan_for_mooncake
+)
 
 @be LogDensityProblems.logdensity_and_gradient($mooncake_ad_logdensity_bugsmodel, $θ)
 @be LogDensityProblems.logdensity_and_gradient($mooncake_ad_logdensity_unrolled, $θ) # stack overflow
 @be LogDensityProblems.logdensity_and_gradient($mooncake_ad_logdensity_with_for_loops, $θ)
-@be LogDensityProblems.logdensity_and_gradient($mooncake_ad_logdensity_match_stan_for_mooncake, $θ)
+@be LogDensityProblems.logdensity_and_gradient(
+    $mooncake_ad_logdensity_match_stan_for_mooncake, $θ
+)
 
 # # with release - v0.4.18
 
@@ -130,7 +185,6 @@ mooncake_ad_logdensity_match_stan_for_mooncake = LogDensityProblemsAD.ADgradient
 #  mean   9.781 μs (66.33 allocs: 4.284 KiB, 0.03% gc time)
 #  max    4.313 ms (66.33 allocs: 4.284 KiB, 99.18% gc time)
 
-
 using StanLogDensityProblems, BridgeStan
 
 stan_model = BridgeStan.StanModel(
@@ -146,4 +200,3 @@ stan_problem = StanLogDensityProblems.StanProblem(stan_model)
 #  median 5.025 μs (2.80 allocs: 54.400 bytes)
 #  mean   5.156 μs (2.80 allocs: 54.400 bytes)
 #  max    8.517 μs (2.80 allocs: 54.400 bytes)
-
