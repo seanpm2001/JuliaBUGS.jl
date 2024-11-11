@@ -13,7 +13,7 @@ abstract type AbstractGibbsState end
 struct GibbsState{T,S,C} <: AbstractGibbsState
     values::T
     conditioning_schedule::S
-    sorted_nodes_cache::C
+    cached_eval_caches::C
 end
 
 ensure_vector(x) = x isa Union{Number,VarName} ? [x] : x
@@ -25,17 +25,18 @@ function AbstractMCMC.step(
     model=l_model.logdensity,
     kwargs...,
 ) where {N,S}
-    sorted_nodes_cache, conditioning_schedule = OrderedDict(), OrderedDict()
+    cached_eval_caches, conditioning_schedule = OrderedDict(), OrderedDict()
     for variable_group in keys(sampler.sampler_map)
         variable_to_condition_on = setdiff(model.parameters, ensure_vector(variable_group))
         conditioning_schedule[variable_to_condition_on] = sampler.sampler_map[variable_group]
         conditioned_model = AbstractPPL.condition(
             model, variable_to_condition_on, model.evaluation_env
         )
-        sorted_nodes_cache[variable_to_condition_on] = conditioned_model.sorted_nodes
+        cached_eval_caches[variable_to_condition_on] =
+            conditioned_model.flattened_graph_node_data
     end
     param_values = JuliaBUGS.getparams(model)
-    return param_values, GibbsState(param_values, conditioning_schedule, sorted_nodes_cache)
+    return param_values, GibbsState(param_values, conditioning_schedule, cached_eval_caches)
 end
 
 function AbstractMCMC.step(
@@ -50,20 +51,20 @@ function AbstractMCMC.step(
     for vs in keys(state.conditioning_schedule)
         model = initialize!(model, param_values)
         cond_model = AbstractPPL.condition(
-            model, vs, model.evaluation_env, state.sorted_nodes_cache[vs]
+            model, vs, model.evaluation_env, state.cached_eval_caches[vs]
         )
         param_values = gibbs_internal(rng, cond_model, state.conditioning_schedule[vs])
     end
     return param_values,
-    GibbsState(param_values, state.conditioning_schedule, state.sorted_nodes_cache)
+    GibbsState(param_values, state.conditioning_schedule, state.cached_eval_caches)
 end
 
 function gibbs_internal end
 
 function gibbs_internal(rng::Random.AbstractRNG, cond_model::BUGSModel, ::MHFromPrior)
     transformed_original = JuliaBUGS.getparams(cond_model)
-    values, logp = evaluate!!(cond_model, LogDensityContext(), transformed_original)
-    values_proposed, logp_proposed = evaluate!!(cond_model, SamplingContext())
+    values, logp = evaluate!!(cond_model, transformed_original)
+    values_proposed, logp_proposed = evaluate!!(rng, cond_model)
 
     if logp_proposed - logp > log(rand(rng))
         values = values_proposed

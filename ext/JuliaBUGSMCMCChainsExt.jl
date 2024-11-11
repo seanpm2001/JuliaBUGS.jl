@@ -1,12 +1,11 @@
 module JuliaBUGSMCMCChainsExt
 
 using JuliaBUGS
-using JuliaBUGS: AbstractBUGSModel, find_generated_vars, LogDensityContext, evaluate!!
+using JuliaBUGS: AbstractBUGSModel, find_generated_vars, evaluate!!
 using JuliaBUGS.AbstractPPL
 using JuliaBUGS.BUGSPrimitives
 using JuliaBUGS.LogDensityProblems
 using JuliaBUGS.LogDensityProblemsAD
-using DynamicPPL
 using AbstractMCMC
 using MCMCChains: Chains
 
@@ -50,6 +49,28 @@ function JuliaBUGS.gen_chains(
     )
 end
 
+# copied from DynamicPPL
+varname_leaves(vn::VarName, ::Real) = [vn]
+function varname_leaves(vn::VarName, val::AbstractArray{<:Union{Real,Missing}})
+    return (
+        VarName(vn, Accessors.IndexLens(Tuple(I)) ∘ getoptic(vn)) for
+        I in CartesianIndices(val)
+    )
+end
+function varname_leaves(vn::VarName, val::AbstractArray)
+    return Iterators.flatten(
+        varname_leaves(VarName(vn, Accessors.IndexLens(Tuple(I)) ∘ getoptic(vn)), val[I])
+        for I in CartesianIndices(val)
+    )
+end
+function varname_leaves(vn::VarName, val::NamedTuple)
+    iter = Iterators.map(keys(val)) do sym
+        optic = Accessors.PropertyLens{sym}()
+        varname_leaves(VarName(vn, optic ∘ getoptic(vn)), optic(val))
+    end
+    return Iterators.flatten(iter)
+end
+
 function JuliaBUGS.gen_chains(
     model::JuliaBUGS.BUGSModel,
     samples,
@@ -63,12 +84,14 @@ function JuliaBUGS.gen_chains(
     g = model.g
 
     generated_vars = find_generated_vars(g)
-    generated_vars = [v for v in model.sorted_nodes if v in generated_vars] # keep the order
+    generated_vars = [
+        v for v in model.flattened_graph_node_data.sorted_nodes if v in generated_vars
+    ] # keep the order
 
     param_vals = []
     generated_quantities = []
     for i in axes(samples)[1]
-        evaluation_env = first(evaluate!!(model, LogDensityContext(), samples[i]))
+        evaluation_env = first(evaluate!!(model, samples[i]))
         push!(
             param_vals,
             [AbstractPPL.get(evaluation_env, param_var) for param_var in param_vars],
@@ -84,13 +107,13 @@ function JuliaBUGS.gen_chains(
 
     param_name_leaves = collect(
         Iterators.flatten([
-            collect(DynamicPPL.varname_leaves(vn, param_vals[1][i])) for
+            collect(varname_leaves(vn, param_vals[1][i])) for
             (i, vn) in enumerate(param_vars)
         ],),
     )
     generated_varname_leaves = collect(
         Iterators.flatten([
-            collect(DynamicPPL.varname_leaves(vn, generated_quantities[1][i])) for
+            collect(varname_leaves(vn, generated_quantities[1][i])) for
             (i, vn) in enumerate(generated_vars)
         ],),
     )
